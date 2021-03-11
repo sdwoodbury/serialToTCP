@@ -3,12 +3,12 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	client "github.com/WesleiRamos/tcp_client"
 	serial "github.com/albenik/go-serial"
 )
 
@@ -38,32 +38,37 @@ func readWrite(port serial.Port, tcpToSensorChan chan []byte, sensorToTcpChan ch
 	}
 }
 
-func netMgr(tcpToSensorChan chan []byte, sensorToTcpChan chan []byte, tcpToSensorSocket *client.Connection, sensorToTcpSocket *client.Connection, shouldQuit chan bool) {
-
-	sensorToTcpSocket.OnOpen(func() {
-		fmt.Println("sensor to tcp socket connected")
-	})
-
-	tcpToSensorSocket.OnOpen(func() {
-		fmt.Println("tcp to sensor socket connected")
-	})
-
-	tcpToSensorSocket.OnMessage(func(message []byte) {
-		tcpToSensorChan <- message
-	})
-
-	sensorToTcpSocket.Listen()
-
+func netWriter(sensorToTcpChan chan []byte, sensorToTcpSocket net.Conn, shouldQuit chan bool) {
 	for {
 		select {
 		case <-shouldQuit:
 			return
 		case toWrite := <-sensorToTcpChan:
-			if sensorToTcpSocket.Connected {
-				sensorToTcpSocket.Write(toWrite)
-			}
+			//sensorToTcpSocket.SetWriteDeadline(time.Now().Add(time.Second * 10))
+			sensorToTcpSocket.Write(toWrite)
 		default:
 			time.Sleep(1 * time.Millisecond)
+		}
+	}
+}
+
+func netReader(tcpToSensorChan chan []byte, tcpToSensorSocket net.Conn, shouldQuit chan bool) {
+	buff := make([]byte, 128)
+	for {
+		select {
+		case <-shouldQuit:
+			return
+		default:
+			//tcpToSensorSocket.SetReadDeadline(time.Now().Add(time.Second * 10))
+			numRead, err := tcpToSensorSocket.Read(buff)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if numRead == 0 {
+				time.Sleep(1 * time.Millisecond)
+				continue
+			}
+			tcpToSensorChan <- buff[:numRead]
 		}
 	}
 }
@@ -91,18 +96,27 @@ func main() {
 	)
 	comPort := "COM16"             //os.Args[1]
 	serverAddress := "192.168.7.2" //os.Args[2]
-	tcpToSensorPort, _ := 8001, 1  //strconv.Atoi(os.Args[3]) // the server has ports as follows: readSerial, writeSerial
-	sensorToTcpPort := tcpToSensorPort + 1
+	tcpToSensorPort, _ := 8002, 1  //strconv.Atoi(os.Args[3]) // the server has ports as follows: readSerial, writeSerial
+	sensorToTcpPort := 8001
+
+	tcpToSensorSocket, err := net.Dial("tcp", fmt.Sprintf("%s:%d", serverAddress, tcpToSensorPort))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	sensorToTcpSocket, err := net.Dial("tcp", fmt.Sprintf("%s:%d", serverAddress, sensorToTcpPort))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("connected to sockets")
+
 	shouldQuit := make(chan bool)
-
-	sensorToTcpSocket := client.New(fmt.Sprintf("%s:%d", serverAddress, sensorToTcpPort))
-	tcpToSensorSocket := client.New(fmt.Sprintf("%s:%d", serverAddress, tcpToSensorPort))
-	sensorPort := getPort(comPort)
-
 	tcpToSensorChan := make(chan []byte)
 	sensorToTcpChan := make(chan []byte)
-	go readWrite(sensorPort, tcpToSensorChan, sensorToTcpChan, shouldQuit)
-	go netMgr(tcpToSensorChan, sensorToTcpChan, sensorToTcpSocket, tcpToSensorSocket, shouldQuit)
+	go readWrite(getPort(comPort), tcpToSensorChan, sensorToTcpChan, shouldQuit)
+	go netWriter(sensorToTcpChan, sensorToTcpSocket, shouldQuit)
+	go netReader(tcpToSensorChan, tcpToSensorSocket, shouldQuit)
 
 	<-signalChan
 
