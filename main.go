@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,7 +11,7 @@ import (
 	"github.com/albenik/go-serial"
 )
 
-func read(port serial.Port, shouldQuit chan bool) {
+func readWrite(port serial.Port, tcpToSensorChan chan []byte, sensorToTcpChan chan []byte, shouldQuit chan bool) {
 
 	buff := make([]byte, 100)
 	readSerial := func() {
@@ -18,9 +19,7 @@ func read(port serial.Port, shouldQuit chan bool) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		if n == 0 {
-			fmt.Println("\nEOF")
-		}
+		sensorToTcpChan <- buff[:n]
 		fmt.Printf("%v", string(buff[:n]))
 	}
 
@@ -29,13 +28,61 @@ func read(port serial.Port, shouldQuit chan bool) {
 		case <-shouldQuit:
 			port.Close()
 			return
+		case incoming := <-tcpToSensorChan:
+			port.Write(incoming)
 		default:
 			readSerial()
 		}
 	}
 }
 
-func mainwork(shouldQuit chan bool) {
+func netMgr(tcpToSensorChan chan []byte, sensorToTcpChan chan []byte, serverAddress string, sensorToTcpPort int, tcpToSensorPort int, shouldQuit chan bool) {
+
+	sensorToTcpAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%d", serverAddress, sensorToTcpPort))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	tcpToSensorAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%d", serverAddress, tcpToSensorPort))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	sensorToTcpConn, err := net.DialTCP("tcp", nil, sensorToTcpAddr)
+	defer sensorToTcpConn.Close()
+	if err != nil {
+		fmt.Printf("error opening sensorToTcp port")
+		log.Fatal(err)
+	}
+
+	tcpToSensorConn, err := net.DialTCP("tcp", nil, tcpToSensorAddr)
+	defer tcpToSensorConn.Close()
+	if err != nil {
+		fmt.Println("error opening tcpToSensor port")
+		log.Fatal(err)
+	}
+
+	readTcpWriteSensor := func() {
+		buf := make([]byte, 1024)
+		reqLen, err := tcpToSensorConn.Read(buf)
+		if err == nil {
+			tcpToSensorChan <- buf[:reqLen]
+		}
+	}
+
+	for {
+		select {
+		case <-shouldQuit:
+			return
+		case toWrite := <-sensorToTcpChan:
+			sensorToTcpConn.Write(toWrite)
+		default:
+			readTcpWriteSensor()
+		}
+	}
+}
+
+func mainwork(shouldQuit chan bool, comPort string, serverAddress string, sensorToTcpPort int, tcpToSensorPort int) {
 	ports, err := serial.GetPortsList()
 	if err != nil {
 		log.Fatal(err)
@@ -44,6 +91,9 @@ func mainwork(shouldQuit chan bool) {
 		log.Fatal("No serial ports found!")
 	}
 	for _, portName := range ports {
+		if portName != comPort {
+			continue
+		}
 		fmt.Printf("Found port: %v\n", portName)
 
 		mode := &serial.Mode{
@@ -54,7 +104,11 @@ func mainwork(shouldQuit chan bool) {
 			log.Fatal(err)
 		}
 
-		read(port, shouldQuit)
+		tcpToSensorChan := make(chan []byte)
+		sensorToTcpChan := make(chan []byte)
+		go netMgr(tcpToSensorChan, sensorToTcpChan, serverAddress, tcpToSensorPort, sensorToTcpPort, shouldQuit)
+		go readWrite(port, tcpToSensorChan, sensorToTcpChan, shouldQuit)
+		break
 	}
 }
 
@@ -67,9 +121,12 @@ func main() {
 		syscall.SIGINT,
 		syscall.SIGQUIT,
 	)
-
+	comPort := "COM16"             //os.Args[1]
+	serverAddress := "192.168.7.2" //os.Args[2]
+	tcpToSensorPort, _ := 8001, 1  //strconv.Atoi(os.Args[3]) // the server has ports as follows: readSerial, writeSerial
+	sensorToTcpPort := tcpToSensorPort + 1
 	shouldQuit := make(chan bool)
-	go mainwork(shouldQuit)
+	go mainwork(shouldQuit, comPort, serverAddress, sensorToTcpPort, tcpToSensorPort)
 
 	<-signalChan
 

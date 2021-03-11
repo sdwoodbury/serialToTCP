@@ -1,3 +1,5 @@
+github.com/WesleiRamos/tcp_client v0.0.0-20170319214905-d40aa84b451a h1:YJ4zdIBAEy08cB4CcKc93S5ok95sYeVf9UyYtb05y9w=
+github.com/WesleiRamos/tcp_client v0.0.0-20170319214905-d40aa84b451a/go.mod h1:TE1+iROH9k4jSE1Lm4c8HIv6R7yCBWuW7vC7s0zNai8=
 github.com/albenik/go-serial v1.2.0 h1:VhEIWqP5tbWtsWoCjeBHHQEf6qeXpsJXvZBP9px5F84=
 github.com/albenik/go-serial v1.2.0/go.mod h1:9NHUOwCBJER+lAaitTWLJda/GnYoP4Vga7KU3vn1lmM=
 github.com/albenik/go-serial/v2 v2.3.0 h1:3/PiNDdOI55JZ02ARpr8us2Az8W9lihdKNxKv+IvcuY=
